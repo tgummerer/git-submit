@@ -3,3 +3,7 @@
 name = "git_submit"
 version = "0.0.1"
 authors = ["Thomas Gummerer <t.gummerer@gmail.com>"]
+
+[dependencies]
+
+git2 = "0.3"
