@@ -7,3 +7,4 @@ authors = ["Thomas Gummerer <t.gummerer@gmail.com>"]
 [dependencies]
 
 git2 = "0.3"
+tempdir = "0.3"

@@ -3,6 +3,7 @@ name = "git_submit"
 version = "0.0.1"
 dependencies = [
  "git2 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tempdir 0.3.4 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
