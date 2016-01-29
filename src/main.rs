@@ -2,7 +2,7 @@ extern crate core;
 extern crate git2;
 extern crate tempdir;
 
-use git2::{Oid, Reference, Repository};
+use git2::{Branch, Oid, Reference, Repository};
 
 fn revs_to_send(repo: &Repository) -> Vec<Oid> {
     let mut revwalk = match repo.revwalk() {
@@ -25,6 +25,22 @@ fn branches(repo: &Repository) -> Vec<Reference> {
     refs.filter(|x| x.is_branch() && x != &head).collect()
 }
 
+fn current_branch<'a>(repo: &'a Repository) -> Result<Branch<'a>, &'static str> {
+    let branches = match repo.branches(None) {
+        Ok(branches) => branches,
+        Err(e) => panic!("error: {}", e),
+    };
+    // TODO(tg): This won't be very nice if we have multiple branches pointing to head.
+    // We should error out in such a case.
+    for branch in branches {
+        let (branch_unwrap, _) = branch;
+        if branch_unwrap.is_head() {
+            return Ok(branch_unwrap);
+        }
+    }
+    Err("no branch pointing to HEAD")
+}
+
 fn main() {
     let repo = match Repository::discover(".") {
         Ok(repo) => repo,
@@ -38,7 +54,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{branches, revs_to_send};
+    use super::{branches, current_branch, revs_to_send};
 
     use git2::{Oid, Repository, Signature, Tree};
     use std::fs;
@@ -135,6 +151,37 @@ mod tests {
 
         let revs = revs_to_send(&repo);
         assert_eq!(revs.len(), 2);
+
+        if let Err(e) = fs::remove_dir_all(repo_path) {
+            panic!("error: {}", e);
+        }
+    }
+
+    #[test]
+    fn test_current_branch() {
+        let tempdir = Box::new(match TempDir::new("git-submit") {
+            Ok(tmp) => tmp,
+            Err(e) => panic!("error: {}", e),
+        });
+        let repo_path = match tempdir.path().to_str() {
+            Some(dir) => dir,
+            None => panic!("error: path isn't valid utf-8"),
+        };
+        init_test_repo(repo_path);
+        let repo = match Repository::open(repo_path) {
+            Ok(repo) => repo,
+            Err(e) => panic!("error: {}", e),
+        };
+
+        let branch = match current_branch(&repo) {
+            Ok(branch) => branch,
+            Err(e) => panic!("error: {}", e),
+        };
+
+        match branch.name() {
+            Ok(name) => assert_eq!(name, Some("master")),
+            Err(e) => panic!("error: {}", e),
+        };
 
         if let Err(e) = fs::remove_dir_all(repo_path) {
             panic!("error: {}", e);
