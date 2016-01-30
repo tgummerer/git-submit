@@ -3,6 +3,7 @@ extern crate git2;
 extern crate tempdir;
 
 use git2::{Branch, Oid, Reference, Repository};
+use std::env;
 
 fn revs_to_send(repo: &Repository) -> Vec<Oid> {
     let mut revwalk = match repo.revwalk() {
@@ -41,11 +42,19 @@ fn current_branch<'a>(repo: &'a Repository) -> Result<Branch<'a>, &'static str> 
     Err("no branch pointing to HEAD")
 }
 
+fn set_path(repo: &Repository) {
+    let repo_root = repo.path();
+    if let Err(e) = env::set_current_dir(repo_root) {
+        panic!("error: {}", e);
+    }
+}
+
 fn main() {
     let repo = match Repository::discover(".") {
         Ok(repo) => repo,
         Err(_) => panic!("you have to be inside of a git repository to use git-submit"),
     };
+    set_path(&repo);
     let revs = revs_to_send(&repo);
     for rev in revs {
         println!("{}", rev);
@@ -57,6 +66,7 @@ mod tests {
     use super::{branches, current_branch, revs_to_send};
 
     use git2::{Oid, Repository, Signature, Tree};
+    use std::env;
     use std::fs;
     use tempdir::TempDir;
 
@@ -66,6 +76,7 @@ mod tests {
             Ok(repo) => repo,
             Err(e) => panic!("error: {}", e),
         };
+        set_path(&repo);
 
         let sig = Signature::now("A U Thor", "author@example.net").unwrap();
 
@@ -83,6 +94,9 @@ mod tests {
         if let Err(e) = repo.branch("test", &commit1, false) {
             panic!("error: {}", e);
         };
+        if let Err(e) = env::set_current_dir(path) {
+            panic!("error: {}", e);
+        }
     }
 
     fn new_tree<'a>(repo: &'a Repository, filename: &str, tree: Option<&Tree>) -> Tree<'a> {
