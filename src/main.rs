@@ -94,19 +94,44 @@ mod tests {
         if let Err(e) = repo.branch("test", &commit1, false) {
             panic!("error: {}", e);
         };
-        if let Err(e) = env::set_current_dir(path) {
+    }
+
+    fn write_file(file: &Path) {
+        let mut f = match File::create(file) {
+            Ok(f) => f,
+            Err(e) => panic!("error: {}", e),
+        };
+        if let Err(e) = f.write_all(b"Hello it's me!") {
             panic!("error: {}", e);
-        }
+        };
+        if let Err(e) = f.sync_all() {
+            panic!("error: {}", e);
+        };
     }
 
     fn new_tree<'a>(repo: &'a Repository, filename: &str, tree: Option<&Tree>) -> Tree<'a> {
+        let path = match repo.workdir() {
+            Some(path) => path.join(filename),
+            None => panic!("repository has to have a worktree"),
+        };
+        let file = path.as_path();
+        write_file(file);
+        let mut index = match repo.index() {
+            Ok(index) => index,
+            Err(e) => panic!("error: {}", e),
+        };
+        if let Err(e) = index.add_path(Path::new(filename)) {
+            panic!("error: {}", e);
+        }
+        let oid = match index.write_tree_to(repo) {
+            Ok(oid) => oid,
+            Err(e) => panic!("error: {}", e),
+        };
+
         let mut builder = match repo.treebuilder(tree) {
             Ok(builder) => builder,
             Err(e) => panic!("error: {}", e),
         };
-        let st = (0..40).map(|_| filename).collect::<String>();
-        let oid = Oid::from_str(st.as_str()).unwrap();
-
         if let Err(e) = builder.insert(filename, oid, 0o100644) {
             panic!("error: {}", e);
         }
