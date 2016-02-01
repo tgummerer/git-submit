@@ -4,6 +4,7 @@ extern crate tempdir;
 
 use git2::{Branch, Oid, Reference, Repository};
 use std::env;
+use std::process::Command;
 
 fn revs_to_send(repo: &Repository) -> Vec<Oid> {
     let mut revwalk = match repo.revwalk() {
@@ -49,6 +50,21 @@ fn set_path(repo: &Repository) {
     }
 }
 
+fn format_patches(revs: Vec<Oid>, branch_name: &str) {
+    let mut command = Command::new("git");
+    command.arg("format-patch");
+    command.arg("-o");
+    command.arg(format!("output-{}", branch_name));
+    if revs.len() >= 3 {
+        command.arg("--cover-letter");
+    }
+    command.arg(format!("{}~..{}", revs[revs.len() - 1], revs[0]));
+    let output = command.output().unwrap_or_else(|e| panic!("error: {}", e));
+    if !output.status.success() {
+        panic!("format-patch failed");
+    }
+}
+
 fn main() {
     let repo = match Repository::discover(".") {
         Ok(repo) => repo,
@@ -56,18 +72,26 @@ fn main() {
     };
     set_path(&repo);
     let revs = revs_to_send(&repo);
-    for rev in revs {
-        println!("{}", rev);
-    }
+    let branch = match current_branch(&repo) {
+        Ok(branch) => branch,
+        Err(e) => panic!("error: {}", e),
+    };
+    let branch_name = match branch.name() {
+        Ok(None) => panic!("branch name not valid"),
+        Ok(Some(name)) => name,
+        Err(e) => panic!("error: {}", e),
+    };
+    format_patches(revs, branch_name);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{branches, current_branch, revs_to_send};
+    use super::{branches, current_branch, format_patches, revs_to_send, set_path};
 
-    use git2::{Oid, Repository, Signature, Tree};
-    use std::env;
-    use std::fs;
+    use git2::{Repository, Signature, Tree};
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::path::Path;
     use tempdir::TempDir;
 
     // TODO(tg): make sure to clean up the repo we created if something goes wrong.
@@ -221,6 +245,36 @@ mod tests {
             Ok(name) => assert_eq!(name, Some("master")),
             Err(e) => panic!("error: {}", e),
         };
+
+        if let Err(e) = fs::remove_dir_all(repo_path) {
+            panic!("error: {}", e);
+        }
+    }
+
+    #[test]
+    fn test_format_patches() {
+        let tempdir = Box::new(match TempDir::new("git-submit") {
+            Ok(tmp) => tmp,
+            Err(e) => panic!("error: {}", e),
+        });
+        let repo_path = match tempdir.path().to_str() {
+            Some(dir) => dir,
+            None => panic!("error: path isn't valid utf-8"),
+        };
+        init_test_repo(repo_path);
+        let repo = match Repository::open(repo_path) {
+            Ok(repo) => repo,
+            Err(e) => panic!("error: {}", e),
+        };
+        set_path(&repo);
+
+        format_patches(revs_to_send(&repo), "master");
+
+        let patch_files = match fs::read_dir(format!("{}/.git/output-master", repo_path)) {
+            Ok(files) => files,
+            Err(e) => panic!("error: {}", e),
+        };
+        assert_eq!(patch_files.count(), 2);
 
         if let Err(e) = fs::remove_dir_all(repo_path) {
             panic!("error: {}", e);
