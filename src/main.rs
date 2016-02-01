@@ -50,7 +50,7 @@ fn set_path(repo: &Repository) {
     }
 }
 
-fn format_patches(revs: Vec<Oid>, branch_name: &str) {
+fn format_patches(revs: Vec<Oid>, branch_name: &str, version: u32) {
     let mut command = Command::new("git");
     command.arg("format-patch");
     command.arg("-o");
@@ -58,12 +58,40 @@ fn format_patches(revs: Vec<Oid>, branch_name: &str) {
     if revs.len() >= 3 {
         command.arg("--cover-letter");
     }
+    if version > 1 {
+        command.arg(format!("-v{}", version));
+    }
     command.arg(format!("{}~..{}", revs[revs.len() - 1], revs[0]));
     let output = command.output().unwrap_or_else(|e| panic!("error: {}", e));
     if !output.status.success() {
         panic!("format-patch failed");
     }
 }
+
+fn find_version(repo: &Repository, branch_name: &str) -> u32 {
+    let tags = match repo.tag_names(Some(format!("{}-v*", branch_name).as_str())) {
+        Ok(tags) => tags,
+        Err(e) => panic!("error: {}", e),
+    };
+    let mut max = 1;
+    for tag in tags.iter() {
+        match tag {
+            Some(tag) => {
+                match tag.replace(format!("{}-v", branch_name).as_str(), "").parse::<u32>() {
+                    Ok(num) => {
+                        if num >= max {
+                            max = num + 1;
+                        }
+                    },
+                    Err(_) => ()
+                }
+            },
+            None => (),
+        }
+    }
+    max
+}
+
 
 fn main() {
     let repo = match Repository::discover(".") {
@@ -81,12 +109,13 @@ fn main() {
         Ok(Some(name)) => name,
         Err(e) => panic!("error: {}", e),
     };
-    format_patches(revs, branch_name);
+    let version = find_version(&repo, branch_name);
+    format_patches(revs, branch_name, version);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{branches, current_branch, format_patches, revs_to_send, set_path};
+    use super::{branches, current_branch, find_version, format_patches, revs_to_send, set_path};
 
     use git2::{Repository, Signature, Tree};
     use std::fs::{self, File};
@@ -268,13 +297,45 @@ mod tests {
         };
         set_path(&repo);
 
-        format_patches(revs_to_send(&repo), "master");
+        format_patches(revs_to_send(&repo), "master", 1);
 
         let patch_files = match fs::read_dir(format!("{}/.git/output-master", repo_path)) {
             Ok(files) => files,
             Err(e) => panic!("error: {}", e),
         };
         assert_eq!(patch_files.count(), 2);
+
+        if let Err(e) = fs::remove_dir_all(repo_path) {
+            panic!("error: {}", e);
+        }
+    }
+
+    #[test]
+    fn test_find_correct_version() {
+        let tempdir = Box::new(match TempDir::new("git-submit") {
+            Ok(tmp) => tmp,
+            Err(e) => panic!("error: {}", e),
+        });
+        let repo_path = match tempdir.path().to_str() {
+            Some(dir) => dir,
+            None => panic!("error: path isn't valid utf-8"),
+        };
+        init_test_repo(repo_path);
+        let repo = match Repository::open(repo_path) {
+            Ok(repo) => repo,
+            Err(e) => panic!("error: {}", e),
+        };
+
+        assert_eq!(find_version(&repo, "master"), 1);
+
+        let master = match repo.revparse_single("master") {
+            Ok(master) => master,
+            Err(e) => panic!("error: {}", e),
+        };
+        if let Err(e) = repo.tag_lightweight("master-v1", &master, false) {
+            panic!("error: {}", e);
+        }
+        assert_eq!(find_version(&repo, "master"), 2);
 
         if let Err(e) = fs::remove_dir_all(repo_path) {
             panic!("error: {}", e);
