@@ -2,36 +2,25 @@ extern crate core;
 extern crate git2;
 extern crate tempdir;
 
-use git2::{Branch, Oid, Reference, Repository};
+use git2::{Branch, Error, Oid, Reference, Repository};
 use std::env;
 use std::process::Command;
 
-fn revs_to_send(repo: &Repository) -> Vec<Oid> {
-    let mut revwalk = match repo.revwalk() {
-        Ok(revwalk) => revwalk,
-        Err(_) => panic!("can't create revwalk"),
-    };
-    if let Err(e) = revwalk.push_head() {
-        panic!("error: {}", e);
-    };
-    let ref_oids = branches(&repo).iter().map(|x| x.target().unwrap()).collect::<Vec<_>>();
-    revwalk.take_while(|x| !ref_oids.contains(x)).collect()
+fn revs_to_send(repo: &Repository) -> Result<Vec<Oid>, Error> {
+    let mut revwalk = try!(repo.revwalk());
+    try!(revwalk.push_head());
+    let ref_oids = try!(branches(&repo)).iter().map(|x| x.target().unwrap()).collect::<Vec<_>>();
+    Ok(revwalk.take_while(|x| !ref_oids.contains(x)).collect())
 }
 
-fn branches(repo: &Repository) -> Vec<Reference> {
-    let refs = match repo.references() {
-        Ok(refs) => refs,
-        Err(e) => panic!("{}", e),
-    };
+fn branches(repo: &Repository) -> Result<Vec<Reference>, Error> {
+    let refs = try!(repo.references());
     let head = repo.head().unwrap();
-    refs.filter(|x| x.is_branch() && x != &head).collect()
+    Ok(refs.filter(|x| x.is_branch() && x != &head).collect())
 }
 
-fn current_branch<'a>(repo: &'a Repository) -> Result<Branch<'a>, &'static str> {
-    let branches = match repo.branches(None) {
-        Ok(branches) => branches,
-        Err(e) => panic!("error: {}", e),
-    };
+fn current_branch<'a>(repo: &'a Repository) -> Result<Branch<'a>, Error> {
+    let branches = try!(repo.branches(None));
     // TODO(tg): This won't be very nice if we have multiple branches pointing to head.
     // We should error out in such a case.
     for branch in branches {
@@ -40,14 +29,12 @@ fn current_branch<'a>(repo: &'a Repository) -> Result<Branch<'a>, &'static str> 
             return Ok(branch_unwrap);
         }
     }
-    Err("no branch pointing to HEAD")
+    Err(Error::from_str("no branch pointing to HEAD"))
 }
 
 fn set_path(repo: &Repository) {
     let repo_root = repo.path();
-    if let Err(e) = env::set_current_dir(repo_root) {
-        panic!("error: {}", e);
-    }
+    env::set_current_dir(repo_root).unwrap();
 }
 
 fn format_patches(revs: Vec<Oid>, branch_name: &str, version: u32) {
@@ -68,11 +55,8 @@ fn format_patches(revs: Vec<Oid>, branch_name: &str, version: u32) {
     }
 }
 
-fn find_version(repo: &Repository, branch_name: &str) -> u32 {
-    let tags = match repo.tag_names(Some(format!("{}-v*", branch_name).as_str())) {
-        Ok(tags) => tags,
-        Err(e) => panic!("error: {}", e),
-    };
+fn find_version(repo: &Repository, branch_name: &str) -> Result<u32, Error> {
+    let tags = try!(repo.tag_names(Some(format!("{}-v*", branch_name).as_str())));
     let mut max = 1;
     for tag in tags.iter() {
         match tag {
@@ -89,27 +73,21 @@ fn find_version(repo: &Repository, branch_name: &str) -> u32 {
             None => (),
         }
     }
-    max
+    Ok(max)
 }
 
 
 fn main() {
-    let repo = match Repository::discover(".") {
-        Ok(repo) => repo,
-        Err(_) => panic!("you have to be inside of a git repository to use git-submit"),
-    };
+    let repo = Repository::discover(".").unwrap();
     set_path(&repo);
-    let revs = revs_to_send(&repo);
-    let branch = match current_branch(&repo) {
-        Ok(branch) => branch,
-        Err(e) => panic!("error: {}", e),
-    };
+    let revs = revs_to_send(&repo).unwrap();
+    let branch = current_branch(&repo).unwrap();
     let branch_name = match branch.name() {
         Ok(None) => panic!("branch name not valid"),
         Ok(Some(name)) => name,
         Err(e) => panic!("error: {}", e),
     };
-    let version = find_version(&repo, branch_name);
+    let version = find_version(&repo, branch_name).unwrap();
     format_patches(revs, branch_name, version);
 }
 
@@ -117,18 +95,14 @@ fn main() {
 mod tests {
     use super::{branches, current_branch, find_version, format_patches, revs_to_send, set_path};
 
-    use git2::{Repository, Signature, Tree};
+    use git2::{Error, Repository, Signature, Tree};
     use std::fs::{self, File};
-    use std::io::Write;
+    use std::io::{self, Write};
     use std::path::Path;
     use tempdir::TempDir;
 
-    // TODO(tg): make sure to clean up the repo we created if something goes wrong.
-    fn init_test_repo(path: &str) {
-        let repo = match Repository::init(path) {
-            Ok(repo) => repo,
-            Err(e) => panic!("error: {}", e),
-        };
+    fn init_test_repo(path: &str) -> Result<(), Error> {
+        let repo = try!(Repository::init(path));
         set_path(&repo);
 
         let sig = Signature::now("A U Thor", "author@example.net").unwrap();
@@ -140,205 +114,105 @@ mod tests {
         let oid2 = repo.commit(Some("HEAD"), &sig, &sig, "commit 2", &tree2, &[&commit1])
             .unwrap();
         let commit2 = repo.find_commit(oid2).unwrap();
-        if let Err(e) = repo.commit(Some("HEAD"), &sig, &sig, "commit 3",
-                                &new_tree(&repo, "3", Some(&tree2)), &[&commit2]) {
-            panic!("error: {}", e);
-        }
-        if let Err(e) = repo.branch("test", &commit1, false) {
-            panic!("error: {}", e);
-        };
+        try!(repo.commit(Some("HEAD"), &sig, &sig, "commit 3",
+                         &new_tree(&repo, "3", Some(&tree2)), &[&commit2]));
+        try!(repo.branch("test", &commit1, false));
+        Ok(())
     }
 
-    fn write_file(file: &Path) {
-        let mut f = match File::create(file) {
-            Ok(f) => f,
-            Err(e) => panic!("error: {}", e),
-        };
-        if let Err(e) = f.write_all(b"Hello it's me!") {
-            panic!("error: {}", e);
-        };
-        if let Err(e) = f.sync_all() {
-            panic!("error: {}", e);
-        };
+    fn write_file(file: &Path) -> Result<(), io::Error> {
+        let mut f = try!(File::create(file));
+        try!(f.write_all(b"Hello it's me!"));
+        try!(f.sync_all());
+        Ok(())
     }
 
     fn new_tree<'a>(repo: &'a Repository, filename: &str, tree: Option<&Tree>) -> Tree<'a> {
-        let path = match repo.workdir() {
-            Some(path) => path.join(filename),
-            None => panic!("repository has to have a worktree"),
-        };
-        let file = path.as_path();
-        write_file(file);
-        let mut index = match repo.index() {
-            Ok(index) => index,
-            Err(e) => panic!("error: {}", e),
-        };
-        if let Err(e) = index.add_path(Path::new(filename)) {
-            panic!("error: {}", e);
-        }
-        let oid = match index.write_tree_to(repo) {
-            Ok(oid) => oid,
-            Err(e) => panic!("error: {}", e),
-        };
+        let pathbuf = repo.workdir().unwrap().join(filename);
+        let file = pathbuf.as_path();
+        write_file(file).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new(filename)).unwrap();
+        let oid = index.write_tree_to(repo).unwrap();
 
-        let mut builder = match repo.treebuilder(tree) {
-            Ok(builder) => builder,
-            Err(e) => panic!("error: {}", e),
-        };
-        if let Err(e) = builder.insert(filename, oid, 0o100644) {
-            panic!("error: {}", e);
-        }
-        match builder.write() {
-            Ok(oid) => {
-                match repo.find_tree(oid) {
-                    Ok(tree) => tree,
-                    Err(e) => panic!("error: {}", e),
-                }
-            },
-            Err(e) => panic!("error: {}", e),
-        }
+        let mut builder = repo.treebuilder(tree).unwrap();
+        builder.insert(filename, oid, 0o100644).unwrap();
+        repo.find_tree(builder.write().unwrap()).unwrap()
     }
 
     #[test]
     fn test_branches() {
-        let tempdir = Box::new(match TempDir::new("git-submit") {
-            Ok(tmp) => tmp,
-            Err(e) => panic!("error: {}", e),
-        });
-        let repo_path = match tempdir.path().to_str() {
-            Some(dir) => dir,
-            None => panic!("error: path isn't valid utf-8"),
-        };
-        init_test_repo(repo_path);
-        let repo = match Repository::open(repo_path) {
-            Ok(repo) => repo,
-            Err(e) => panic!("error: {}", e),
-        };
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
 
-        let bs = branches(&repo);
+        let bs = branches(&repo).unwrap();
         assert_eq!(bs.len(), 1);
         assert!(bs[0].is_branch());
         assert_eq!(bs[0].name(), Some("refs/heads/test"));
 
-        if let Err(e) = fs::remove_dir_all(repo_path) {
-            panic!("error: {}", e);
-        }
+        fs::remove_dir_all(repo_path).unwrap();
     }
 
     #[test]
     fn test_revs_to_send() {
-        let tempdir = Box::new(match TempDir::new("git-submit") {
-            Ok(tmp) => tmp,
-            Err(e) => panic!("error: {}", e),
-        });
-        let repo_path = match tempdir.path().to_str() {
-            Some(dir) => dir,
-            None => panic!("error: path isn't valid utf-8"),
-        };
-        init_test_repo(repo_path);
-        let repo = match Repository::open(repo_path) {
-            Ok(repo) => repo,
-            Err(e) => panic!("error: {}", e),
-        };
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
 
-        let revs = revs_to_send(&repo);
+        let revs = revs_to_send(&repo).unwrap();
         assert_eq!(revs.len(), 2);
 
-        if let Err(e) = fs::remove_dir_all(repo_path) {
-            panic!("error: {}", e);
-        }
+        fs::remove_dir_all(repo_path).unwrap();
     }
 
     #[test]
     fn test_current_branch() {
-        let tempdir = Box::new(match TempDir::new("git-submit") {
-            Ok(tmp) => tmp,
-            Err(e) => panic!("error: {}", e),
-        });
-        let repo_path = match tempdir.path().to_str() {
-            Some(dir) => dir,
-            None => panic!("error: path isn't valid utf-8"),
-        };
-        init_test_repo(repo_path);
-        let repo = match Repository::open(repo_path) {
-            Ok(repo) => repo,
-            Err(e) => panic!("error: {}", e),
-        };
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
 
-        let branch = match current_branch(&repo) {
-            Ok(branch) => branch,
-            Err(e) => panic!("error: {}", e),
-        };
+        let branch = current_branch(&repo).unwrap();
 
-        match branch.name() {
-            Ok(name) => assert_eq!(name, Some("master")),
-            Err(e) => panic!("error: {}", e),
-        };
+        let branch_name = branch.name().unwrap();
+        assert_eq!(branch_name, Some("master"));
 
-        if let Err(e) = fs::remove_dir_all(repo_path) {
-            panic!("error: {}", e);
-        }
+        fs::remove_dir_all(repo_path).unwrap();
     }
 
     #[test]
     fn test_format_patches() {
-        let tempdir = Box::new(match TempDir::new("git-submit") {
-            Ok(tmp) => tmp,
-            Err(e) => panic!("error: {}", e),
-        });
-        let repo_path = match tempdir.path().to_str() {
-            Some(dir) => dir,
-            None => panic!("error: path isn't valid utf-8"),
-        };
-        init_test_repo(repo_path);
-        let repo = match Repository::open(repo_path) {
-            Ok(repo) => repo,
-            Err(e) => panic!("error: {}", e),
-        };
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
         set_path(&repo);
 
-        format_patches(revs_to_send(&repo), "master", 1);
+        let revs = revs_to_send(&repo).unwrap();
+        format_patches(revs, "master", 1);
 
-        let patch_files = match fs::read_dir(format!("{}/.git/output-master", repo_path)) {
-            Ok(files) => files,
-            Err(e) => panic!("error: {}", e),
-        };
+        let patch_files = fs::read_dir(format!("{}/.git/output-master", repo_path)).unwrap();
         assert_eq!(patch_files.count(), 2);
 
-        if let Err(e) = fs::remove_dir_all(repo_path) {
-            panic!("error: {}", e);
-        }
+        fs::remove_dir_all(repo_path).unwrap();
     }
 
     #[test]
     fn test_find_correct_version() {
-        let tempdir = Box::new(match TempDir::new("git-submit") {
-            Ok(tmp) => tmp,
-            Err(e) => panic!("error: {}", e),
-        });
-        let repo_path = match tempdir.path().to_str() {
-            Some(dir) => dir,
-            None => panic!("error: path isn't valid utf-8"),
-        };
-        init_test_repo(repo_path);
-        let repo = match Repository::open(repo_path) {
-            Ok(repo) => repo,
-            Err(e) => panic!("error: {}", e),
-        };
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
 
-        assert_eq!(find_version(&repo, "master"), 1);
+        assert_eq!(find_version(&repo, "master").unwrap(), 1);
 
-        let master = match repo.revparse_single("master") {
-            Ok(master) => master,
-            Err(e) => panic!("error: {}", e),
-        };
-        if let Err(e) = repo.tag_lightweight("master-v1", &master, false) {
-            panic!("error: {}", e);
-        }
-        assert_eq!(find_version(&repo, "master"), 2);
+        let master = repo.revparse_single("master").unwrap();
+        repo.tag_lightweight("master-v1", &master, false).unwrap();
+        assert_eq!(find_version(&repo, "master").unwrap(), 2);
 
-        if let Err(e) = fs::remove_dir_all(repo_path) {
-            panic!("error: {}", e);
-        }
+        fs::remove_dir_all(repo_path).unwrap();
     }
 }
