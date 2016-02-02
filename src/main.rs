@@ -76,6 +76,11 @@ fn find_version(repo: &Repository, branch_name: &str) -> Result<u32, Error> {
     Ok(max)
 }
 
+fn tag_version(repo: &Repository, branch_name: &str, version: u32) -> Result<(), Error> {
+    let branch = try!(repo.revparse_single(branch_name));
+    try!(repo.tag_lightweight(format!("{}-v{}", branch_name, version).as_str(), &branch, true));
+    Ok(())
+}
 
 fn main() {
     let repo = Repository::discover(".").unwrap();
@@ -89,11 +94,13 @@ fn main() {
     };
     let version = find_version(&repo, branch_name).unwrap();
     format_patches(revs, branch_name, version);
+    tag_version(&repo, branch_name, version).unwrap();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{branches, current_branch, find_version, format_patches, revs_to_send, set_path};
+    use super::{branches, current_branch, find_version, format_patches, revs_to_send, set_path,
+                tag_version};
 
     use git2::{Error, Repository, Signature, Tree};
     use std::fs::{self, File};
@@ -211,6 +218,21 @@ mod tests {
 
         let master = repo.revparse_single("master").unwrap();
         repo.tag_lightweight("master-v1", &master, false).unwrap();
+        assert_eq!(find_version(&repo, "master").unwrap(), 2);
+
+        fs::remove_dir_all(repo_path).unwrap();
+    }
+
+    #[test]
+    fn test_tag_version() {
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
+
+        tag_version(&repo, "master", 1).unwrap();
+        let tag = repo.find_reference("refs/tags/master-v1").unwrap();
+        assert!(tag.is_tag());
         assert_eq!(find_version(&repo, "master").unwrap(), 2);
 
         fs::remove_dir_all(repo_path).unwrap();
