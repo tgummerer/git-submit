@@ -4,6 +4,8 @@ extern crate tempdir;
 
 use git2::{Branch, Error, Oid, Reference, Repository};
 use std::env;
+use std::fs;
+use std::io;
 use std::process::Command;
 
 fn revs_to_send(repo: &Repository) -> Result<Vec<Oid>, Error> {
@@ -82,6 +84,28 @@ fn tag_version(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
     Ok(())
 }
 
+fn send_emails(repo: &Repository, branch_name: &str, version: u32) -> Result<(), io::Error> {
+    let mut command = Command::new("git");
+    command.arg("send-email");
+    command.arg("--dry-run");
+    command.arg("--to=t.gummerer@gmail.com");
+    if version <= 1 {
+        command.arg("--cc-cmd=git contacts");
+    }
+
+    let path = repo.path();
+    let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
+                                                branch_name)));
+    for file in patch_files {
+        let f = try!(file);
+        if f.path().to_str().is_some() {
+            command.arg(f.path().to_str().unwrap());
+        }
+    }
+    try!(command.output());
+    Ok(())
+}
+
 fn main() {
     let repo = Repository::discover(".").unwrap();
     set_path(&repo);
@@ -95,6 +119,7 @@ fn main() {
     let version = find_version(&repo, branch_name).unwrap();
     format_patches(revs, branch_name, version);
     tag_version(&repo, branch_name, version).unwrap();
+    send_emails(&repo, branch_name, version).unwrap();
 }
 
 #[cfg(test)]
