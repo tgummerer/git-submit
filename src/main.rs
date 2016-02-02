@@ -106,6 +106,15 @@ fn send_emails(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
     Ok(())
 }
 
+fn remove_patches(repo: &Repository, branch_name: &str) {
+    fs::remove_dir_all(format!("{}/output-{}/", repo.path().to_str().unwrap_or("./"),
+                               branch_name)).unwrap();
+}
+
+fn remove_tag(repo: &Repository, branch_name: &str, version: u32) {
+    repo.tag_delete(format!("{}-v{}", branch_name, version).as_str()).unwrap();
+}
+
 fn main() {
     let repo = Repository::discover(".").unwrap();
     set_path(&repo);
@@ -118,14 +127,21 @@ fn main() {
     };
     let version = find_version(&repo, branch_name).unwrap();
     format_patches(revs, branch_name, version);
-    tag_version(&repo, branch_name, version).unwrap();
-    send_emails(&repo, branch_name, version).unwrap();
+    if let Err(e) = tag_version(&repo, branch_name, version) {
+        remove_patches(&repo, branch_name);
+        panic!("error: {}", e);
+    };
+    if let Err(e) = send_emails(&repo, branch_name, version) {
+        remove_tag(&repo, branch_name, version);
+        panic!("error: {}", e);
+    };
+    remove_patches(&repo, branch_name);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{branches, current_branch, find_version, format_patches, revs_to_send, set_path,
-                tag_version};
+    use super::{branches, current_branch, find_version, format_patches, remove_patches,
+                remove_tag, revs_to_send, set_path, tag_version};
 
     use git2::{Error, Repository, Signature, Tree};
     use std::fs::{self, File};
@@ -259,6 +275,41 @@ mod tests {
         let tag = repo.find_reference("refs/tags/master-v1").unwrap();
         assert!(tag.is_tag());
         assert_eq!(find_version(&repo, "master").unwrap(), 2);
+
+        fs::remove_dir_all(repo_path).unwrap();
+    }
+
+    #[test]
+    fn test_remove_patches() {
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
+        set_path(&repo);
+
+        let revs = revs_to_send(&repo).unwrap();
+        format_patches(revs, "master", 1);
+        remove_patches(&repo, "master");
+        let files = fs::read_dir(format!("{}/.git/output-master", repo_path));
+        assert!(files.is_err());
+
+        fs::remove_dir_all(repo_path).unwrap();
+    }
+
+    #[test]
+    fn test_remove_tag() {
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
+
+        tag_version(&repo, "master", 1).unwrap();
+        let tag = repo.find_reference("refs/tags/master-v1").unwrap();
+        assert!(tag.is_tag());
+        assert_eq!(find_version(&repo, "master").unwrap(), 2);
+        remove_tag(&repo, "master", 1);
+        let tag_result = repo.find_reference("refs/tags/master-v1");
+        assert!(tag_result.is_err());
 
         fs::remove_dir_all(repo_path).unwrap();
     }
