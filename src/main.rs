@@ -6,7 +6,8 @@ use git2::{Branch, Error, Oid, Reference, Repository};
 use std::env;
 use std::fs;
 use std::io;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::str;
 
 fn revs_to_send(repo: &Repository) -> Result<Vec<Oid>, Error> {
     let mut revwalk = try!(repo.revwalk());
@@ -103,6 +104,34 @@ fn send_emails(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
         }
     }
     try!(command.output());
+    println!("{}", str::from_utf8(command.output().unwrap().stdout.as_slice()).unwrap());
+    println!("{}", str::from_utf8(command.output().unwrap().stderr.as_slice()).unwrap());
+    Ok(())
+}
+
+fn edit_patches(repo: &Repository, branch_name: &str) -> Result<(), io::Error> {
+    let path = repo.path();
+    let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
+                                                branch_name)));
+    for file in patch_files {
+        let f = try!(file);
+        if !f.path().to_str().is_some() {
+            return Err(io::Error::new(io::ErrorKind::Other, "path is not valid utf-8"));
+        }
+        let editor = match env::var("EDITOR") {
+            Ok(editor) => editor,
+            Err(_) => return Err(io::Error::new(io::ErrorKind::Other,
+                                                "EDITOR environment variable has to be set")),
+        };
+        let mut editor_split = editor.split(" ");
+        let mut command = Command::new(editor_split.next().unwrap());
+        for es in editor_split {
+            command.arg(es);
+        }
+        command.arg(f.path().to_str().unwrap());
+        command.stdout(Stdio::inherit());
+        try!(command.output());
+    }
     Ok(())
 }
 
@@ -127,6 +156,7 @@ fn main() {
     };
     let version = find_version(&repo, branch_name).unwrap();
     format_patches(revs, branch_name, version);
+    edit_patches(&repo, branch_name).unwrap();
     if let Err(e) = tag_version(&repo, branch_name, version) {
         remove_patches(&repo, branch_name);
         panic!("error: {}", e);
@@ -140,10 +170,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{branches, current_branch, find_version, format_patches, remove_patches,
-                remove_tag, revs_to_send, set_path, tag_version};
+    use super::{branches, current_branch, edit_patches, find_version, format_patches,
+                remove_patches, remove_tag, revs_to_send, set_path, tag_version};
 
     use git2::{Error, Repository, Signature, Tree};
+    use std::env;
     use std::fs::{self, File};
     use std::io::{self, Write};
     use std::path::Path;
@@ -310,6 +341,26 @@ mod tests {
         remove_tag(&repo, "master", 1);
         let tag_result = repo.find_reference("refs/tags/master-v1");
         assert!(tag_result.is_err());
+
+        fs::remove_dir_all(repo_path).unwrap();
+    }
+
+    #[test]
+    fn test_edit_patches() {
+        let tempdir = Box::new(TempDir::new("git-submit").unwrap());
+        let repo_path = tempdir.path().to_str().unwrap();
+        init_test_repo(repo_path).unwrap();
+        let repo = Repository::open(repo_path).unwrap();
+        set_path(&repo);
+
+        let revs = revs_to_send(&repo).unwrap();
+        format_patches(revs, "master", 1);
+        env::set_var("EDITOR", "truncate --size=0");
+        edit_patches(&repo, "master").unwrap();
+        let patch_files = fs::read_dir(format!("{}/.git/output-master", repo_path)).unwrap();
+        for file in patch_files {
+            assert_eq!(file.unwrap().metadata().unwrap().len(), 0);
+        }
 
         fs::remove_dir_all(repo_path).unwrap();
     }
