@@ -1,8 +1,11 @@
 extern crate core;
 extern crate git2;
+extern crate regex;
 extern crate tempdir;
 
-use git2::{Branch, Error, Oid, Reference, Repository};
+use git2::{Branch, Error, Oid, Reference, Repository, ResetType, StatusOptions};
+use git2::build::CheckoutBuilder;
+use regex::Regex;
 use std::env;
 use std::fs;
 use std::io;
@@ -40,7 +43,7 @@ fn set_path(repo: &Repository) {
     env::set_current_dir(repo_root.unwrap()).unwrap();
 }
 
-fn format_patches(revs: Vec<Oid>, branch_name: &str, version: u32) {
+fn format_patches(revs: &Vec<Oid>, branch_name: &str, version: u32) {
     let mut command = Command::new("git");
     command.arg("format-patch");
     command.arg("-o");
@@ -135,6 +138,58 @@ fn edit_patches(repo: &Repository, branch_name: &str) -> Result<(), io::Error> {
     Ok(())
 }
 
+fn is_clean(repo: &Repository) -> Result<bool, Error> {
+    let statuses = try!(repo.statuses(Some(&mut StatusOptions::new())));
+    Ok(statuses.len() == 0)
+}
+
+fn rebuild_branch(repo: &Repository, original_revs: &Vec<Oid>, branch_name: &str)
+                  -> Result<(), Error> {
+    let obj = try!(repo.revparse_single(format!("{}~", original_revs[original_revs.len() - 1])
+                                        .as_str()));
+    let clean = try!(is_clean(&repo));
+    if !clean {
+        if let Err(_) = Command::new("git").arg("stash").output() {
+            return Err(Error::from_str("git stash failed"))
+        }
+    }
+    try!(repo.reset(&obj, ResetType::Hard, Some(&mut CheckoutBuilder::new())));
+    let path = repo.workdir().unwrap();
+    let patch_files = match fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
+                                                 branch_name)) {
+        Ok(files) => files,
+        Err(_) => return Err(Error::from_str("could not read patch files")),
+    };
+    let re = Regex::new("(v[0-9]+-)?0000.*?").unwrap();
+    for file in patch_files {
+        if file.is_ok() {
+            let f = file.unwrap();
+            match f.path().to_str() {
+                Some(filename) => if re.is_match(filename) {
+                    continue;
+                },
+                None => continue,
+            };
+            let mut command = Command::new("git");
+            command.arg("am");
+            command.arg("--3way");
+            command.arg(f.path().to_str().unwrap());
+            match command.output() {
+                Ok(output) => if !output.status.success() {
+                    return Err(Error::from_str("git am unsuccessful"));
+                },
+                Err(_) => return Err(Error::from_str("git am failed")),
+            };
+        }
+    }
+    if !clean {
+        if let Err(_) = Command::new("git").arg("stash").arg("pop").output() {
+            return Err(Error::from_str("git stash pop failed"))
+        }
+    }
+    Ok(())
+}
+
 fn remove_patches(repo: &Repository, branch_name: &str) {
     fs::remove_dir_all(format!("{}/output-{}/", repo.workdir().unwrap().to_str().unwrap_or("./"),
                                branch_name)).unwrap();
@@ -155,8 +210,12 @@ fn main() {
         Err(e) => panic!("error: {}", e),
     };
     let version = find_version(&repo, branch_name).unwrap();
-    format_patches(revs, branch_name, version);
+    format_patches(&revs, branch_name, version);
     edit_patches(&repo, branch_name).unwrap();
+    if let Err(e) = rebuild_branch(&repo, &revs, branch_name) {
+        remove_patches(&repo, branch_name);
+        panic!("error: {}", e);
+    };
     if let Err(e) = tag_version(&repo, branch_name, version) {
         remove_patches(&repo, branch_name);
         panic!("error: {}", e);
@@ -271,7 +330,7 @@ mod tests {
         set_path(&repo);
 
         let revs = revs_to_send(&repo).unwrap();
-        format_patches(revs, "master", 1);
+        format_patches(&revs, "master", 1);
 
         let patch_files = fs::read_dir(format!("{}/output-master", repo_path)).unwrap();
         assert_eq!(patch_files.count(), 2);
@@ -319,7 +378,7 @@ mod tests {
         set_path(&repo);
 
         let revs = revs_to_send(&repo).unwrap();
-        format_patches(revs, "master", 1);
+        format_patches(&revs, "master", 1);
         remove_patches(&repo, "master");
         let files = fs::read_dir(format!("{}/output-master", repo_path));
         assert!(files.is_err());
@@ -354,7 +413,7 @@ mod tests {
         set_path(&repo);
 
         let revs = revs_to_send(&repo).unwrap();
-        format_patches(revs, "master", 1);
+        format_patches(&revs, "master", 1);
         env::set_var("EDITOR", "truncate --size=0");
         edit_patches(&repo, "master").unwrap();
         let patch_files = fs::read_dir(format!("{}/output-master", repo_path)).unwrap();

@@ -8,3 +8,4 @@ authors = ["Thomas Gummerer <t.gummerer@gmail.com>"]
 
 git2 = "0.3"
 tempdir = "0.3"
+regex = "0.1"
