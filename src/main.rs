@@ -3,7 +3,7 @@ extern crate git2;
 extern crate regex;
 extern crate tempdir;
 
-use git2::{Branch, Error, Oid, Reference, Repository, ResetType, StatusOptions};
+use git2::{Branch, Error, ObjectType, Oid, Reference, Repository, ResetType, StatusOptions};
 use git2::build::CheckoutBuilder;
 use regex::Regex;
 use std::env;
@@ -207,7 +207,10 @@ fn main() {
     let version = find_version(&repo, branch_name).unwrap();
     format_patches(&revs, branch_name, version);
     edit_patches(&repo, branch_name).unwrap();
+    let head = repo.head().unwrap();
     if let Err(e) = rebuild_branch(&repo, &revs, branch_name) {
+        repo.reset(&head.peel(ObjectType::Any).unwrap(), ResetType::Hard,
+                   Some(&mut CheckoutBuilder::new())).unwrap();
         remove_patches(&repo, branch_name);
         panic!("error: {}", e);
     };
