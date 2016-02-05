@@ -147,12 +147,6 @@ fn rebuild_branch(repo: &Repository, original_revs: &Vec<Oid>, branch_name: &str
                   -> Result<(), Error> {
     let obj = try!(repo.revparse_single(format!("{}~", original_revs[original_revs.len() - 1])
                                         .as_str()));
-    let clean = try!(is_clean(&repo));
-    if !clean {
-        if let Err(_) = Command::new("git").arg("stash").output() {
-            return Err(Error::from_str("git stash failed"))
-        }
-    }
     try!(repo.reset(&obj, ResetType::Hard, Some(&mut CheckoutBuilder::new())));
     let path = repo.workdir().unwrap();
     let patch_files = match fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
@@ -182,11 +176,6 @@ fn rebuild_branch(repo: &Repository, original_revs: &Vec<Oid>, branch_name: &str
             };
         }
     }
-    if !clean {
-        if let Err(_) = Command::new("git").arg("stash").arg("pop").output() {
-            return Err(Error::from_str("git stash pop failed"))
-        }
-    }
     Ok(())
 }
 
@@ -201,6 +190,12 @@ fn remove_tag(repo: &Repository, branch_name: &str, version: u32) {
 
 fn main() {
     let repo = Repository::discover(".").unwrap();
+    match is_clean(&repo) {
+        Ok(clean) => if !clean {
+            panic!("git-submit can't be run with changes in the working tree");
+        },
+        Err(e) => panic!("error: {}", e),
+    }
     set_path(&repo);
     let revs = revs_to_send(&repo).unwrap();
     let branch = current_branch(&repo).unwrap();
