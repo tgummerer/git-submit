@@ -36,8 +36,8 @@ fn current_branch<'a>(repo: &'a Repository) -> Result<Branch<'a>, Error> {
 }
 
 fn set_path(repo: &Repository) {
-    let repo_root = repo.path();
-    env::set_current_dir(repo_root).unwrap();
+    let repo_root = repo.workdir();
+    env::set_current_dir(repo_root.unwrap()).unwrap();
 }
 
 fn format_patches(revs: Vec<Oid>, branch_name: &str, version: u32) {
@@ -94,7 +94,7 @@ fn send_emails(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
         command.arg("--cc-cmd=git contacts");
     }
 
-    let path = repo.path();
+    let path = repo.workdir().unwrap();
     let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
                                                 branch_name)));
     for file in patch_files {
@@ -110,7 +110,7 @@ fn send_emails(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
 }
 
 fn edit_patches(repo: &Repository, branch_name: &str) -> Result<(), io::Error> {
-    let path = repo.path();
+    let path = repo.workdir().unwrap();
     let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
                                                 branch_name)));
     for file in patch_files {
@@ -136,7 +136,7 @@ fn edit_patches(repo: &Repository, branch_name: &str) -> Result<(), io::Error> {
 }
 
 fn remove_patches(repo: &Repository, branch_name: &str) {
-    fs::remove_dir_all(format!("{}/output-{}/", repo.path().to_str().unwrap_or("./"),
+    fs::remove_dir_all(format!("{}/output-{}/", repo.workdir().unwrap().to_str().unwrap_or("./"),
                                branch_name)).unwrap();
 }
 
@@ -273,7 +273,7 @@ mod tests {
         let revs = revs_to_send(&repo).unwrap();
         format_patches(revs, "master", 1);
 
-        let patch_files = fs::read_dir(format!("{}/.git/output-master", repo_path)).unwrap();
+        let patch_files = fs::read_dir(format!("{}/output-master", repo_path)).unwrap();
         assert_eq!(patch_files.count(), 2);
 
         fs::remove_dir_all(repo_path).unwrap();
@@ -321,7 +321,7 @@ mod tests {
         let revs = revs_to_send(&repo).unwrap();
         format_patches(revs, "master", 1);
         remove_patches(&repo, "master");
-        let files = fs::read_dir(format!("{}/.git/output-master", repo_path));
+        let files = fs::read_dir(format!("{}/output-master", repo_path));
         assert!(files.is_err());
 
         fs::remove_dir_all(repo_path).unwrap();
@@ -357,7 +357,7 @@ mod tests {
         format_patches(revs, "master", 1);
         env::set_var("EDITOR", "truncate --size=0");
         edit_patches(&repo, "master").unwrap();
-        let patch_files = fs::read_dir(format!("{}/.git/output-master", repo_path)).unwrap();
+        let patch_files = fs::read_dir(format!("{}/output-master", repo_path)).unwrap();
         for file in patch_files {
             assert_eq!(file.unwrap().metadata().unwrap().len(), 0);
         }
