@@ -103,9 +103,9 @@ fn send_emails(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
             command.arg(f.path().to_str().unwrap());
         }
     }
-    try!(command.output());
-    println!("{}", str::from_utf8(command.output().unwrap().stdout.as_slice()).unwrap());
-    println!("{}", str::from_utf8(command.output().unwrap().stderr.as_slice()).unwrap());
+    let output = try!(command.output());
+    println!("{}", str::from_utf8(output.stdout.as_slice()).unwrap());
+    println!("{}", str::from_utf8(output.stderr.as_slice()).unwrap());
     Ok(())
 }
 
