@@ -1,8 +1,10 @@
 extern crate core;
+extern crate getopts;
 extern crate git2;
 extern crate regex;
 extern crate tempdir;
 
+use getopts::Options;
 use git2::{Branch, Error, ObjectType, Oid, Reference, Repository, ResetType, StatusOptions};
 use git2::build::CheckoutBuilder;
 use regex::Regex;
@@ -88,12 +90,24 @@ fn tag_version(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
     Ok(())
 }
 
-fn send_emails(repo: &Repository, branch_name: &str, version: u32) -> Result<(), io::Error> {
+fn send_emails(repo: &Repository, branch_name: &str, version: u32,
+               to: Vec<String>, cc: Vec<String>) -> Result<(), io::Error> {
     let mut command = Command::new("git");
     command.arg("send-email");
     command.arg("--dry-run");
-    command.arg("--to=t.gummerer@gmail.com");
-    if version <= 1 {
+    if !to.is_empty() {
+        for addr in to {
+            command.arg(format!("--to={}", addr));
+        }
+    } else {
+        // TODO(tg): get from config
+        command.arg("--to=t.gummerer@gmail.com");
+    }
+    if !cc.is_empty() {
+        for addr in cc {
+            command.arg(format!("--cc={}", addr));
+        }
+    } else if version <= 1 {
         command.arg("--cc-cmd=git contacts");
     }
 
@@ -189,6 +203,23 @@ fn remove_tag(repo: &Repository, branch_name: &str, version: u32) {
 }
 
 fn main() {
+    let args: Vec<String> = env::args().collect();
+
+    let mut opts = Options::new();
+    opts.optopt("", "to", "set to addresses", "to");
+    opts.optopt("", "cc", "set cc addresses", "cc");
+    opts.optflag("h", "help", "print this help menu");
+    let matches = match opts.parse(&args[1..]) {
+        Ok(m) => m,
+        Err(e) => panic!("error: {}", e),
+    };
+    if matches.opt_present("h") {
+        print!("{}", opts.usage(&format!("usage: [options]")));
+        return;
+    }
+    let to: Vec<String> = matches.opt_strs("to");
+    let cc: Vec<String> = matches.opt_strs("cc");
+
     let repo = Repository::discover(".").unwrap();
     match is_clean(&repo) {
         Ok(clean) => if !clean {
@@ -218,7 +249,7 @@ fn main() {
         remove_patches(&repo, branch_name);
         panic!("error: {}", e);
     };
-    if let Err(e) = send_emails(&repo, branch_name, version) {
+    if let Err(e) = send_emails(&repo, branch_name, version, to, cc) {
         remove_tag(&repo, branch_name, version);
         panic!("error: {}", e);
     };
