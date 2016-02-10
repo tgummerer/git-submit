@@ -1,16 +1,22 @@
 extern crate core;
+extern crate email;
 extern crate getopts;
 extern crate git2;
+extern crate hyper;
 extern crate regex;
 extern crate tempdir;
 
+use email::Address;
+use email::Mailbox;
+use email::MimeMessage;
 use getopts::Options;
 use git2::{Branch, Error, ObjectType, Oid, Reference, Repository, ResetType, StatusOptions};
 use git2::build::CheckoutBuilder;
+use hyper::Client;
 use regex::Regex;
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::process::{Command, Stdio};
 use std::str;
 
@@ -202,12 +208,51 @@ fn remove_tag(repo: &Repository, branch_name: &str, version: u32) {
     repo.tag_delete(format!("{}-v{}", branch_name, version).as_str()).unwrap();
 }
 
+fn format_addr(mb: Mailbox) -> String {
+    match mb.name {
+        Some(name) => format!("{} <{}>", name, mb.address),
+        None => mb.address,
+    }
+}
+
+fn find_addresses(command_line: Vec<String>, reply_to: Option<String>, addr_type: String)
+           -> Result<Vec<String>, hyper::error::Error> {
+    let mut addresses = command_line;
+    match reply_to {
+        Some(r) => {
+            let client = Client::new();
+            let article_res =
+                try!(client.get(format!("http://mid.gmane.org/{}", r).as_str()).send());
+            let mut raw_res = try!(client.get(
+                format!("{}/raw", article_res.url.serialize()).as_str()).send());
+
+            let mut body = String::new();
+            raw_res.read_to_string(&mut body).unwrap();
+            let header_map = MimeMessage::parse(body.as_str()).unwrap().headers;
+
+            for addr in header_map.get_value::<Vec<Address>>(addr_type).unwrap() {
+                match addr {
+                    Address::Mailbox(mb) => addresses.push(format_addr(mb)),
+                    Address::Group(_, g) => {
+                        for mb in g {
+                            addresses.push(format_addr(mb));
+                        }
+                    },
+                };
+            };
+        },
+        None => (),
+    };
+    Ok(addresses)
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut opts = Options::new();
     opts.optopt("", "to", "set to addresses", "to");
     opts.optopt("", "cc", "set cc addresses", "cc");
+    opts.optopt("", "in-reply-to", "reply to message-id", "message-id");
     opts.optflag("h", "help", "print this help menu");
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -217,8 +262,15 @@ fn main() {
         print!("{}", opts.usage(&format!("usage: [options]")));
         return;
     }
-    let to: Vec<String> = matches.opt_strs("to");
-    let cc: Vec<String> = matches.opt_strs("cc");
+    let to_only: Vec<String> = find_addresses(matches.opt_strs("to"),
+                                              matches.opt_str("in-reply-to"),
+                                              String::from("To")).unwrap();
+    // Add the from address to the to list as well.
+    let to: Vec<String> = find_addresses(to_only, matches.opt_str("in-reply-to"),
+                                         String::from("From")).unwrap();
+    let cc: Vec<String> = find_addresses(matches.opt_strs("cc"),
+                                         matches.opt_str("in-reply-to"),
+                                         String::from("Cc")).unwrap();
 
     let repo = Repository::discover(".").unwrap();
     match is_clean(&repo) {
@@ -258,9 +310,11 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{branches, current_branch, edit_patches, find_version, format_patches,
-                remove_patches, remove_tag, revs_to_send, set_path, tag_version};
+    use super::{branches, current_branch, edit_patches, find_addresses, find_version,
+                format_addr, format_patches, remove_patches, remove_tag, revs_to_send,
+                set_path, tag_version};
 
+    use email::Mailbox;
     use git2::{Error, Repository, Signature, Tree};
     use std::env;
     use std::fs::{self, File};
@@ -451,5 +505,76 @@ mod tests {
         }
 
         fs::remove_dir_all(repo_path).unwrap();
+    }
+
+    #[test]
+    fn test_find_address_name() {
+        let mb = Mailbox::new_with_name(String::from("Test Name"),
+                                        String::from("test@example.com"));
+        assert_eq!(format_addr(mb), String::from("Test Name <test@example.com>"));
+    }
+
+    #[test]
+    fn test_find_address_no_name() {
+        let mb = Mailbox::new(String::from("test@example.com"));
+        assert_eq!(format_addr(mb), String::from("test@example.com"));
+    }
+
+    #[test]
+    fn test_find_addresses_command_line() {
+        assert_eq!(find_addresses(vec!(String::from("test@example.com"),
+                                       String::from("snd@example.com")), None,
+                                  String::from("To")).unwrap(),
+                   vec!(String::from("test@example.com"),
+                        String::from("snd@example.com")));
+    }
+
+    #[test]
+    fn test_find_to_mail() {
+        assert_eq!(find_addresses(Vec::new(),
+                                  Some(String::from(
+                                      "1453136238-19448-1-git-send-email-t.gummerer@gmail.com")),
+                                  String::from("To")).unwrap(),
+                   vec!(String::from("git@vger.kernel.org")));
+    }
+
+    #[test]
+    fn test_find_cc_mail() {
+        assert_eq!(find_addresses(Vec::new(),
+                                  Some(String::from(
+                                      "1453136238-19448-1-git-send-email-t.gummerer@gmail.com")),
+                                  String::from("Cc")).unwrap(),
+                   vec!(String::from("peff@peff.net"),
+                        String::from("bturner@atlassian.com"),
+                        String::from("gitster@pobox.com"),
+                        String::from("pedrorijo91@gmail.com"),
+                        String::from("Thomas Gummerer <t.gummerer@gmail.com>")));
+    }
+
+    #[test]
+    fn test_find_combined_command_line_to_mail() {
+        assert_eq!(find_addresses(vec!(String::from("test@example.com")),
+                                  Some(String::from(
+                                      "1453136238-19448-1-git-send-email-t.gummerer@gmail.com")),
+                                  String::from("To")).unwrap(),
+                   vec!(String::from("test@example.com"),
+                        String::from("git@vger.kernel.org")));
+    }
+
+    #[test]
+    fn test_add_from_addresses() {
+        let to_only = find_addresses(vec!(String::from("test@example.com")),
+                                     Some(String::from(
+                                         "1453136238-19448-1-git-send-email-t.gummerer@gmail.com")),
+                                     String::from("To")).unwrap();
+        assert_eq!(to_only, vec!(String::from("test@example.com"),
+                                 String::from("git@vger.kernel.org")));
+        assert_eq!(find_addresses(to_only,
+                                  Some(String::from(
+                                      "1453136238-19448-1-git-send-email-t.gummerer@gmail.com")),
+                                  String::from("From")).unwrap(),
+                   vec!(String::from("test@example.com"),
+                        String::from("git@vger.kernel.org"),
+                        String::from("Thomas Gummerer <t.gummerer@gmail.com>")));
     }
 }
