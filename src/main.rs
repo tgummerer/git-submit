@@ -105,9 +105,6 @@ fn send_emails(repo: &Repository, branch_name: &str,
         for addr in to {
             command.arg(format!("--to={}", addr));
         }
-    } else {
-        // TODO(tg): get from config
-        command.arg("--to=t.gummerer@gmail.com");
     }
     if !cc.is_empty() {
         for addr in cc {
