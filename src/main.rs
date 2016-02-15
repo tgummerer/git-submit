@@ -101,6 +101,10 @@ fn send_emails(repo: &Repository, branch_name: &str,
     let mut command = Command::new("git");
     command.arg("send-email");
     command.arg("--dry-run");
+    if to.is_empty() && cc.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::Other,
+                                  "please specify at least one address"));
+    }
     if !to.is_empty() {
         for addr in to {
             command.arg(format!("--to={}", addr));
