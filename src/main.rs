@@ -55,7 +55,7 @@ fn format_patches(revs: &Vec<Oid>, branch_name: &str, version: u32) {
     let mut command = Command::new("git");
     command.arg("format-patch");
     command.arg("-o");
-    command.arg(format!("output-{}", branch_name));
+    command.arg(format!("output-{}", branch_name).replace("/", "_"));
     if revs.len() >= 3 {
         command.arg("--cover-letter");
     }
@@ -119,7 +119,7 @@ fn send_emails(repo: &Repository, branch_name: &str, version: u32,
 
     let path = repo.workdir().unwrap();
     let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
-                                                branch_name)));
+                                                branch_name.replace("/", "_"))));
     for file in patch_files {
         let f = try!(file);
         if f.path().to_str().is_some() {
@@ -135,7 +135,7 @@ fn send_emails(repo: &Repository, branch_name: &str, version: u32,
 fn edit_patches(repo: &Repository, branch_name: &str) -> Result<(), io::Error> {
     let path = repo.workdir().unwrap();
     let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
-                                                branch_name)));
+                                                branch_name.replace("/", "_"))));
     for file in patch_files {
         let f = try!(file);
         if !f.path().to_str().is_some() {
@@ -170,7 +170,7 @@ fn rebuild_branch(repo: &Repository, original_revs: &Vec<Oid>, branch_name: &str
     try!(repo.reset(&obj, ResetType::Hard, Some(&mut CheckoutBuilder::new())));
     let path = repo.workdir().unwrap();
     let patch_files = match fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
-                                                 branch_name)) {
+                                                 branch_name.replace("/", "_"))) {
         Ok(files) => files,
         Err(_) => return Err(Error::from_str("could not read patch files")),
     };
@@ -201,7 +201,7 @@ fn rebuild_branch(repo: &Repository, original_revs: &Vec<Oid>, branch_name: &str
 
 fn remove_patches(repo: &Repository, branch_name: &str) {
     fs::remove_dir_all(format!("{}/output-{}/", repo.workdir().unwrap().to_str().unwrap_or("./"),
-                               branch_name)).unwrap();
+                               branch_name.replace("/", "_"))).unwrap();
 }
 
 fn remove_tag(repo: &Repository, branch_name: &str, version: u32) {
