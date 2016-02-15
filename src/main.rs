@@ -248,8 +248,8 @@ fn main() {
     let args: Vec<String> = env::args().collect();
 
     let mut opts = Options::new();
-    opts.optopt("", "to", "set to addresses", "to");
-    opts.optopt("", "cc", "set cc addresses", "cc");
+    opts.optmulti("", "to", "set to addresses", "to");
+    opts.optmulti("", "cc", "set cc addresses", "cc");
     opts.optopt("", "in-reply-to", "reply to message-id", "message-id");
     opts.optflag("h", "help", "print this help menu");
     let matches = match opts.parse(&args[1..]) {
