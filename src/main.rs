@@ -96,7 +96,7 @@ fn tag_version(repo: &Repository, branch_name: &str, version: u32) -> Result<(),
     Ok(())
 }
 
-fn send_emails(repo: &Repository, branch_name: &str,
+fn send_emails(repo: &Repository, branch_name: &str, in_reply_to: Option<String>,
                to: Vec<String>, cc: Vec<String>) -> Result<(), io::Error> {
     let mut command = Command::new("git");
     command.arg("send-email");
@@ -114,6 +114,9 @@ fn send_emails(repo: &Repository, branch_name: &str,
         for addr in cc {
             command.arg(format!("--cc={}", addr));
         }
+    }
+    if in_reply_to.is_some() {
+        command.arg(format!("--in-reply-to={}", in_reply_to.unwrap()));
     }
 
     let path = repo.workdir().unwrap();
@@ -327,7 +330,7 @@ fn main() {
         remove_patches(&repo, branch_name);
         panic!("error: {}", e);
     };
-    if let Err(e) = send_emails(&repo, branch_name, to, cc) {
+    if let Err(e) = send_emails(&repo, branch_name, matches.opt_str("in-reply-to"), to, cc) {
         remove_tag(&repo, branch_name, version);
         panic!("error: {}", e);
     };
