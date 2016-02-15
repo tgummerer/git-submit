@@ -118,11 +118,17 @@ fn send_emails(repo: &Repository, branch_name: &str,
     let path = repo.workdir().unwrap();
     let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
                                                 branch_name.replace("/", "_"))));
+    let mut file_list = Vec::new();
     for file in patch_files {
         let f = try!(file);
         if f.path().to_str().is_some() {
-            command.arg(f.path().to_str().unwrap());
+            let st = f.path();
+            file_list.push(st)
         }
+    }
+    file_list.sort();
+    for file in file_list {
+        command.arg(file);
     }
     let output = try!(command.output());
     println!("{}", str::from_utf8(output.stdout.as_slice()).unwrap());
@@ -134,11 +140,19 @@ fn edit_patches(repo: &Repository, branch_name: &str) -> Result<(), io::Error> {
     let path = repo.workdir().unwrap();
     let patch_files = try!(fs::read_dir(format!("{}/output-{}/", path.to_str().unwrap_or("./"),
                                                 branch_name.replace("/", "_"))));
+    let mut file_list = Vec::new();
     for file in patch_files {
         let f = try!(file);
-        if !f.path().to_str().is_some() {
+        if f.path().to_str().is_some() {
+            let st = f.path();
+            file_list.push(st)
+        } else {
             return Err(io::Error::new(io::ErrorKind::Other, "path is not valid utf-8"));
         }
+    }
+    file_list.sort();
+
+    for file in file_list {
         let editor = match env::var("EDITOR") {
             Ok(editor) => editor,
             Err(_) => return Err(io::Error::new(io::ErrorKind::Other,
@@ -149,7 +163,7 @@ fn edit_patches(repo: &Repository, branch_name: &str) -> Result<(), io::Error> {
         for es in editor_split {
             command.arg(es);
         }
-        command.arg(f.path().to_str().unwrap());
+        command.arg(file);
         command.stdout(Stdio::inherit());
         try!(command.output());
     }
@@ -173,26 +187,39 @@ fn rebuild_branch(repo: &Repository, original_revs: &Vec<Oid>, branch_name: &str
         Err(_) => return Err(Error::from_str("could not read patch files")),
     };
     let re = Regex::new("(v[0-9]+-)?0000.*?").unwrap();
+
+    let mut file_list = Vec::new();
     for file in patch_files {
-        if file.is_ok() {
-            let f = file.unwrap();
-            match f.path().to_str() {
-                Some(filename) => if re.is_match(filename) {
-                    continue;
-                },
-                None => continue,
-            };
-            let mut command = Command::new("git");
-            command.arg("am");
-            command.arg("--3way");
-            command.arg(f.path().to_str().unwrap());
-            match command.output() {
-                Ok(output) => if !output.status.success() {
-                    return Err(Error::from_str("git am unsuccessful"));
-                },
-                Err(_) => return Err(Error::from_str("git am failed")),
-            };
+        let f = match file {
+            Ok(file) => file,
+            Err(e) => return Err(Error::from_str(format!("{}", e).as_str())),
+        };
+        if f.path().to_str().is_some() {
+            let st = f.path();
+            file_list.push(st)
+        } else {
+            return Err(Error::from_str("path is not valid utf-8"));
         }
+    }
+    file_list.sort();
+
+    for file in file_list {
+        match file.to_str() {
+            Some(filename) => if re.is_match(filename) {
+                continue;
+            },
+            None => continue,
+        };
+        let mut command = Command::new("git");
+        command.arg("am");
+        command.arg("--3way");
+        command.arg(file.to_str().unwrap());
+        match command.output() {
+            Ok(output) => if !output.status.success() {
+                return Err(Error::from_str("git am unsuccessful"));
+            },
+            Err(_) => return Err(Error::from_str("git am failed")),
+        };
     }
     Ok(())
 }
