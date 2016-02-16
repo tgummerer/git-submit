@@ -100,7 +100,6 @@ fn send_emails(repo: &Repository, branch_name: &str, in_reply_to: Option<String>
                to: Vec<String>, cc: Vec<String>) -> Result<(), io::Error> {
     let mut command = Command::new("git");
     command.arg("send-email");
-    command.arg("--dry-run");
     if to.is_empty() && cc.is_empty() {
         return Err(io::Error::new(io::ErrorKind::Other,
                                   "please specify at least one address"));
