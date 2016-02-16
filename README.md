@@ -9,6 +9,10 @@ to implement it in git-send-email, but wasn't too happy with the
 result.  Also some of the features I wanted did not really fit into
 git itself, so I decided to write my own small thing.
 
+If you are looking for something more graphical, Roberto Tyley's
+[submitgit](https://github.com/rtyley/submitgit) is probably a good
+alternative for you.
+
 # How do I install it?
 
 As this is written in [Rust](https://github.com/rust-lang/rust), it
