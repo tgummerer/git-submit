@@ -316,6 +316,10 @@ fn main() {
         Err(e) => panic!("error: {}", e),
     };
     let version = find_version(&repo, branch_name).unwrap();
+    if version > 1 && matches.opt_str("in-reply-to").is_none() {
+        panic!("This is version {} of the patch series, --in-reply-to=<previous-message-id> should be used",
+               version);
+    }
     format_patches(&revs, branch_name, version);
     edit_patches(&repo, branch_name).unwrap();
     let head = repo.head().unwrap();
